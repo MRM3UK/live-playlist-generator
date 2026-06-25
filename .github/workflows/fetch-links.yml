@@ -2,9 +2,11 @@ name: Fetch Live Links & Generate Playlist
 
 on:
   schedule:
-    # Run every 10 minutes
-    - cron: '*/10 * * * *'
-  workflow_dispatch: # Allow manual trigger
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - 'model.txt'
 
 permissions:
   contents: write
@@ -12,6 +14,7 @@ permissions:
 jobs:
   fetch-and-generate:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -22,19 +25,48 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('scraper/requirements.txt') }}
+
+      - name: Cache Playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-chromium-v2
+
       - name: Install dependencies
         run: |
           pip install -r scraper/requirements.txt
           playwright install chromium
           playwright install-deps chromium
 
+      - name: Show favourites
+        run: |
+          echo "── model.txt ──"
+          cat model.txt 2>/dev/null || echo "(not found)"
+          echo ""
+
       - name: Run scraper
         run: python scraper/fetch_models.py
 
-      - name: Commit and push playlist
+      - name: Show result
+        run: |
+          echo "── playlist ──"
+          cat playlists/live.m3u
+          echo ""
+          echo "── stream count ──"
+          grep -c "^https" playlists/live.m3u || echo "0"
+
+      - name: Commit and push
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add playlists/
-          git diff --staged --quiet || git commit -m "Update playlist - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          TIMESTAMP=$(date -u +'%Y-%m-%d %H:%M:%S UTC')
+          STREAMS=$(grep -c "^https" playlists/live.m3u 2>/dev/null || echo "0")
+          FAVS=$(grep -c "Favourites" playlists/live.m3u 2>/dev/null || echo "0")
+          git diff --staged --quiet || git commit -m "🔴 ${STREAMS} verified streams (${FAVS} favs) — ${TIMESTAMP}"
           git push
